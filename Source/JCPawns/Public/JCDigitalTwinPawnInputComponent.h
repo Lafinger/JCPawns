@@ -17,6 +17,8 @@ class JCPAWNS_API UJCDigitalTwinPawnInputComponent final: public UActorComponent
 {
 	GENERATED_BODY()
 
+	friend AJCDigitalTwinPawn;
+
 public:
 	// Sets default values for this component's properties
 	UJCDigitalTwinPawnInputComponent();
@@ -44,6 +46,9 @@ public:
 		static_assert(TPointerIsConvertibleFromTo<T, AController>::Value, "'T' template parameter to GetController must be derived from AController");
 		return GetPawnChecked<APawn>()->GetController<T>();
 	}
+
+	virtual void Activate(bool bReset = false) override;
+	virtual void Deactivate() override;
 
 	
 protected:

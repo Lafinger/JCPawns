@@ -41,6 +41,33 @@ void UJCDigitalTwinPawnInputComponent::TickComponent(float DeltaTime, ELevelTick
 }
 
 
+void UJCDigitalTwinPawnInputComponent::Activate(bool bReset)
+{
+	Super::Activate(bReset);
+
+	if(APlayerController* PlayerController = GetController<APlayerController>())
+	{
+		if(UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
+		{
+			Subsystem->RemoveMappingContext(InputMappingContext);
+			Subsystem->AddMappingContext(InputMappingContext, 0);
+		}
+	}
+}
+
+void UJCDigitalTwinPawnInputComponent::Deactivate()
+{
+	Super::Deactivate();
+
+	if(APlayerController* PlayerController = GetController<APlayerController>())
+	{
+		if(UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
+		{
+			Subsystem->RemoveMappingContext(InputMappingContext);
+		}
+	}
+}
+
 // Called when the game starts
 void UJCDigitalTwinPawnInputComponent::BeginPlay()
 {
@@ -67,7 +94,7 @@ void UJCDigitalTwinPawnInputComponent::SetupPlayerInputComponent(UInputComponent
 	{
 		if(UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
 		{
-			Subsystem->AddMappingContext(InputMappingContext, 0);
+			// Subsystem->AddMappingContext(InputMappingContext, 0);
 			SpringArmLengthTemp = OwnerPawn->SpringArmComponent->TargetArmLength;
 			FRotator PawnRotator = OwnerPawn->GetActorRotation();
 			PlayerController->SetControlRotation(FRotator(PawnRotator.Pitch, PawnRotator.Yaw, 0));
@@ -75,13 +102,16 @@ void UJCDigitalTwinPawnInputComponent::SetupPlayerInputComponent(UInputComponent
 		}
 	}
 
-	if(UJCEnhancedInputComponent* JCEnhancedInputComponent = CastChecked<UJCEnhancedInputComponent>(InPlayerInputComponent))
+	UJCEnhancedInputComponent* JCEnhancedInputComponent = Cast<UJCEnhancedInputComponent>(InPlayerInputComponent);
+	if(!JCEnhancedInputComponent)
 	{
-		JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_GroundMove, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_GroundMove);
-		JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_ViewMove, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_ViewMove);
-		JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_Look, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_Look);
-		JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_Zoom, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_Zoom);
+		ensureAlwaysMsgf(false, TEXT("Please replace EnhancedInputComponent by JCEnhancedInputComponent in project setting!"));
+		return;
 	}
+	JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_GroundMove, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_GroundMove);
+	JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_ViewMove, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_ViewMove);
+	JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_Look, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_Look);
+	JCEnhancedInputComponent->BindJCInputAction(JCInputConfig, JCPawnsGameplayTags::JC_Input_Zoom, ETriggerEvent::Triggered, this, &ThisClass::OnInputEvent_Zoom);
 	
 }
 

@@ -4,9 +4,11 @@
 #include "JCDigitalTwinPawn.h"
 
 #include "JCDigitalTwinPawnInputComponent.h"
+#include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/SphereComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Kismet/KismetSystemLibrary.h"
 
 
 // Sets default values
@@ -70,6 +72,16 @@ void AJCDigitalTwinPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 	JCDigitalTwinPawnInputComponent->SetupPlayerInputComponent(PlayerInputComponent);
 }
 
+void AJCDigitalTwinPawn::ActivateInput()
+{
+	JCDigitalTwinPawnInputComponent->Activate();
+}
+
+void AJCDigitalTwinPawn::DeactivateInput()
+{
+	JCDigitalTwinPawnInputComponent->Deactivate();
+}
+
 void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
 {
 	// Create a bounding volume of InActor.
@@ -112,6 +124,62 @@ void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
 	LerpToTargetLocation(Location);
 }
 
+void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor)
+{
+	if(bIsBlending)
+	{
+		return;
+	}
+	
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if(!PlayerController)
+	{
+		ensureAlwaysMsgf(false, TEXT("This pawn has not been possessed by PlayerController!"));
+		return;
+	}
+	
+	if(CameraComponent->GetComponentLocation().Equals(InCameraActor->GetActorLocation(), 10.0) && PlayerController->GetControlRotation().Equals(InCameraActor->GetActorRotation(), 5.0))
+	{
+		return;
+	}
+
+	// start to blend
+	bIsBlending = true;
+	DeactivateInput();
+	PlayerController->SetViewTargetWithBlend(InCameraActor, BlendTime, VTBlend_EaseInOut, 1.0, false);
+	DelegateHandle_BlendComplete = PlayerController->PlayerCameraManager->OnBlendComplete().AddWeakLambda(this, [this, InCameraActor, PlayerController]()
+	{
+		FVector StartPos = InCameraActor->GetActorLocation();
+		FVector EndPos = InCameraActor->GetActorLocation() + InCameraActor->GetActorForwardVector() * LineTraceDistance;
+
+		ECollisionChannel CollisionChannel = ECollisionChannel::ECC_Visibility;
+		UWorld* World = GEngine->GetWorldFromContextObject(this, EGetWorldErrorMode::LogAndReturnNull);
+		FHitResult OutHit;
+		bool const bHit = World ? World->LineTraceSingleByChannel(OutHit, StartPos, EndPos, CollisionChannel) : false;
+		if(bHit)
+		{
+			SetActorLocation(OutHit.Location);
+			SpringArmComponent->TargetArmLength = OutHit.Distance;
+			JCDigitalTwinPawnInputComponent->SpringArmLengthTemp = SpringArmComponent->TargetArmLength;
+		}
+		else
+		{
+			SetActorLocation(InCameraActor->GetActorLocation());
+			SpringArmComponent->TargetArmLength = 0.0;
+			JCDigitalTwinPawnInputComponent->SpringArmLengthTemp = SpringArmComponent->TargetArmLength;
+		}
+		
+		PlayerController->Possess(this);
+		PlayerController->SetControlRotation(
+			FRotator(FMath::Clamp(InCameraActor->GetActorRotation().Pitch, -JCDigitalTwinPawnInputComponent->LookClamp.Y, -JCDigitalTwinPawnInputComponent->LookClamp.X),
+				InCameraActor->GetActorRotation().Yaw,
+				0.0));
+		ActivateInput();
+		PlayerController->PlayerCameraManager->OnBlendComplete().Remove(DelegateHandle_BlendComplete);
+		bIsBlending = false;
+	});
+}
+
 bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation)
 {
 	const FVector Position = InBoundingBox.GetCenter();
@@ -132,7 +200,7 @@ bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundin
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 	if(!PlayerController)
 	{
-		ensureAlwaysMsgf(false, TEXT("There has no player to controll!"));
+		ensureAlwaysMsgf(false, TEXT("This pawn has not been possessed by PlayerController!"));
 		return false;
 	}
 

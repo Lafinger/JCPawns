@@ -44,9 +44,17 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "JC")
 	UJCDigitalTwinPawnInputComponent* JCDigitalTwinPawnInputComponent;
 
+	UFUNCTION(BlueprintCallable, Category = "JC")
+	void ActivateInput();
+
+	UFUNCTION(BlueprintCallable, Category = "JC")
+	void DeactivateInput();
 
 	UFUNCTION(BlueprintCallable, Category = "JC")
 	void FocusViewportOnActor(const AActor* InTargetActor);
+
+	UFUNCTION(BlueprintCallable, Category = "JC")
+	void FocusViewportAsCamera(ACameraActor* InCameraActor);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "JC")
 	float FocusSpeed = 10.0;
@@ -59,10 +67,10 @@ public:
 
 private:
 	bool CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation);
-	
 	void LerpToTargetLocation(const FVector& InTargetLocation);
 
 	bool bIsBlending = false;
+	FDelegateHandle DelegateHandle_BlendComplete;
 
 	/** Current viewport Position. */
 	FVector	FocusCurrentLocation;
