@@ -44,7 +44,32 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "JC")
 	UJCDigitalTwinPawnInputComponent* JCDigitalTwinPawnInputComponent;
 
+
+	UFUNCTION(BlueprintCallable, Category = "JC")
+	void FocusViewportOnActor(const AActor* InTargetActor);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "JC")
+	float FocusSpeed = 10.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "JC")
+	float LineTraceDistance = 1000000000.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "JC")
+	float BlendTime = 1.0;
+
 private:
-	FName PawnName;
+	bool CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation);
 	
+	void LerpToTargetLocation(const FVector& InTargetLocation);
+
+	bool bIsBlending = false;
+
+	/** Current viewport Position. */
+	FVector	FocusCurrentLocation;
+
+	/** Viewport start location when animating to another location */
+	FVector FocusStartLocation;
+	
+	/** Desired viewport location when animating between two locations */
+	FVector	FocusTargetLocation;
 };

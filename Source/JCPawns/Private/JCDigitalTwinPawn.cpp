@@ -14,9 +14,7 @@ AJCDigitalTwinPawn::AJCDigitalTwinPawn()
 {
 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
-
-	PawnName = FName("DigitalTwinPawn");
-
+	
 	// scene
 	SphereComponent = CreateDefaultSubobject<USphereComponent>(FName("DigitalTwinPawnSphere"));
 	SphereComponent->InitSphereRadius(35.0f);
@@ -42,6 +40,14 @@ AJCDigitalTwinPawn::AJCDigitalTwinPawn()
 void AJCDigitalTwinPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	if (!FocusCurrentLocation.Equals(FocusTargetLocation, 0.05))
+	{
+		FocusCurrentLocation = FMath::InterpExpoOut(FocusStartLocation, FocusTargetLocation, 0.05f);
+		FocusCurrentLocation = FMath::VInterpTo(FocusStartLocation, FocusTargetLocation, DeltaTime, FocusSpeed);
+		FocusStartLocation = FocusCurrentLocation;
+		SetActorLocation(FocusCurrentLocation);
+	}
 }
 
 
@@ -62,4 +68,85 @@ void AJCDigitalTwinPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 	Super::SetupPlayerInputComponent(PlayerInputComponent); // No bindings by default.
 
 	JCDigitalTwinPawnInputComponent->SetupPlayerInputComponent(PlayerInputComponent);
+}
+
+void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
+{
+	// Create a bounding volume of InActor.
+	FBox BoundingBox(ForceInit);
+	if (USceneComponent* Root = InTargetActor->GetRootComponent())
+	{
+		TArray<USceneComponent*> SceneComponents;
+		Root->GetChildrenComponents(true, SceneComponents);
+		SceneComponents.Add(Root);
+
+		bool bHasAtLeastOnePrimitiveComponent = false;
+		for (USceneComponent* SceneComponent : SceneComponents)
+		{
+			UPrimitiveComponent* PrimitiveComponent = Cast<UPrimitiveComponent>(SceneComponent);
+			if (PrimitiveComponent && PrimitiveComponent->IsRegistered())
+			{
+				// Some components can have huge bounds but are not visible.  Ignore these components unless it is the only component on the actor 
+				const bool bIgnore = SceneComponents.Num() > 1 && PrimitiveComponent->GetIgnoreBoundsForEditorFocus();
+				if (!bIgnore)
+				{
+					BoundingBox += PrimitiveComponent->Bounds.GetBox();
+					bHasAtLeastOnePrimitiveComponent = true;
+				}
+			}
+		}
+
+		if (!bHasAtLeastOnePrimitiveComponent)
+		{
+			BoundingBox += Root->GetComponentLocation();
+		}
+	}
+
+	FVector Location;
+	bool IsCalcCameraToBoxSuccess = CalcCameraLocationWithBoundingBox(BoundingBox, Location);
+	if(!IsCalcCameraToBoxSuccess)
+	{
+		return;
+	}
+	
+	LerpToTargetLocation(Location);
+}
+
+bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation)
+{
+	const FVector Position = InBoundingBox.GetCenter();
+	float Radius = FMath::Max(InBoundingBox.GetExtent().Size(), 10.f);
+
+	float AspectRatio = 0;
+	FVector2D ViewportSize;
+	GetWorld()->GetGameViewport()->GetViewportSize(ViewportSize);
+	if (ViewportSize.X > 0 && ViewportSize.Y > 0)
+	{
+		AspectRatio = ViewportSize.X / ViewportSize.Y;
+	}
+	if (AspectRatio > 1.0f)
+	{
+		Radius *= AspectRatio;
+	}
+	
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if(!PlayerController)
+	{
+		ensureAlwaysMsgf(false, TEXT("There has no player to controll!"));
+		return false;
+	}
+
+	float ViewFOV = PlayerController->PlayerCameraManager->GetFOVAngle();
+	const float HalfFOVRadians = FMath::DegreesToRadians(ViewFOV / 2.0f);
+	const float DistanceFromSphere = Radius / FMath::Tan(HalfFOVRadians);
+	FVector CameraOffsetVector = PlayerController->GetControlRotation().Vector() * -DistanceFromSphere;
+	
+	OutTargetLocation = Position + CameraOffsetVector;
+	return true;
+}
+
+void AJCDigitalTwinPawn::LerpToTargetLocation(const FVector& InTargetLocation)
+{
+	FocusTargetLocation = InTargetLocation;
+	FocusStartLocation = GetActorLocation();
 }
