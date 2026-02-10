@@ -58,6 +58,7 @@ void AJCDigitalTwinPawn::BeginPlay()
 {
 	Super::BeginPlay();
 	
+	// ActivateInput();
 }
 
 void AJCDigitalTwinPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
