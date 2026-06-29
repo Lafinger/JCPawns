@@ -54,7 +54,7 @@ public:
 	void FocusViewportOnActor(const AActor* InTargetActor);
 
 	UFUNCTION(BlueprintCallable, Category = "JC")
-	void FocusViewportAsCamera(ACameraActor* InCameraActor);
+	void FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime = -1, const EViewTargetBlendFunction InBlendFunction = EViewTargetBlendFunction::VTBlend_EaseInOut, const float InBlendExp = 1.0f, bool bInLockOutgoing = false);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "JC")
 	float FocusSpeed = 10.0;

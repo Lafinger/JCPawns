@@ -125,9 +125,9 @@ void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
 	LerpToTargetLocation(Location);
 }
 
-void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor)
+void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime, const EViewTargetBlendFunction InBlendFunction, const float InBlendExp, bool bInLockOutgoing)
 {
-	if(bIsBlending)
+	if(!InCameraActor || bIsBlending)
 	{
 		return;
 	}
@@ -147,7 +147,7 @@ void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor)
 	// start to blend
 	bIsBlending = true;
 	DeactivateInput();
-	PlayerController->SetViewTargetWithBlend(InCameraActor, BlendTime, VTBlend_EaseInOut, 1.0, false);
+	PlayerController->SetViewTargetWithBlend(InCameraActor, InBlendTime == -1 ? BlendTime : InBlendTime, InBlendFunction, InBlendExp, bInLockOutgoing);
 	DelegateHandle_BlendComplete = PlayerController->PlayerCameraManager->OnBlendComplete().AddWeakLambda(this, [this, InCameraActor, PlayerController]()
 	{
 		FVector StartPos = InCameraActor->GetActorLocation();
