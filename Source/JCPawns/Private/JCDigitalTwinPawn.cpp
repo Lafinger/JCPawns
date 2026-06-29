@@ -6,7 +6,11 @@
 #include "JCDigitalTwinPawnInputComponent.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/CameraTypes.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Components/SphereComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Kismet/KismetSystemLibrary.h"
 
@@ -63,6 +67,19 @@ void AJCDigitalTwinPawn::BeginPlay()
 
 void AJCDigitalTwinPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if(APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		ClearBlendCompleteDelegate(PlayerController);
+	}
+
+	if(IsValid(BlendSnapshotCamera))
+	{
+		BlendSnapshotCamera->Destroy();
+		BlendSnapshotCamera = nullptr;
+	}
+
+	bIsBlending = false;
+
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -127,58 +144,199 @@ void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
 
 void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime, const EViewTargetBlendFunction InBlendFunction, const float InBlendExp, bool bInLockOutgoing)
 {
-	if(!InCameraActor || bIsBlending)
+	if(!InCameraActor)
 	{
 		return;
 	}
 	
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if(!PlayerController)
+	if(!PlayerController || !PlayerController->PlayerCameraManager)
 	{
 		ensureAlwaysMsgf(false, TEXT("This pawn has not been possessed by PlayerController!"));
 		return;
 	}
 	
-	if(CameraComponent->GetComponentLocation().Equals(InCameraActor->GetActorLocation(), 10.0) && PlayerController->GetControlRotation().Equals(InCameraActor->GetActorRotation(), 5.0))
+	if(!bIsBlending && CameraComponent->GetComponentLocation().Equals(InCameraActor->GetActorLocation(), 10.0) && PlayerController->GetControlRotation().Equals(InCameraActor->GetActorRotation(), 5.0))
 	{
 		return;
 	}
 
+	const bool bWasBlending = bIsBlending;
+	const int32 FocusRequestId = ++FocusViewportAsCameraRequestId;
+	const float ResolvedBlendTime = InBlendTime == -1 ? BlendTime : InBlendTime;
+
+	ClearBlendCompleteDelegate(PlayerController);
+	if(bWasBlending && CaptureCurrentCameraPOV(PlayerController))
+	{
+		PlayerController->SetViewTarget(BlendSnapshotCamera);
+	}
+
 	// start to blend
 	bIsBlending = true;
+	StopFocusLocationLerp();
 	DeactivateInput();
-	PlayerController->SetViewTargetWithBlend(InCameraActor, InBlendTime == -1 ? BlendTime : InBlendTime, InBlendFunction, InBlendExp, bInLockOutgoing);
-	DelegateHandle_BlendComplete = PlayerController->PlayerCameraManager->OnBlendComplete().AddWeakLambda(this, [this, InCameraActor, PlayerController]()
-	{
-		FVector StartPos = InCameraActor->GetActorLocation();
-		FVector EndPos = InCameraActor->GetActorLocation() + InCameraActor->GetActorForwardVector() * LineTraceDistance;
 
-		ECollisionChannel CollisionChannel = ECollisionChannel::ECC_Visibility;
-		UWorld* World = GEngine->GetWorldFromContextObject(this, EGetWorldErrorMode::LogAndReturnNull);
-		FHitResult OutHit;
-		bool const bHit = World ? World->LineTraceSingleByChannel(OutHit, StartPos, EndPos, CollisionChannel) : false;
-		if(bHit)
+	if(ResolvedBlendTime <= 0.0f)
+	{
+		PlayerController->SetViewTarget(InCameraActor);
+		CompleteFocusViewportAsCamera(InCameraActor, PlayerController, FocusRequestId);
+		return;
+	}
+
+	PlayerController->SetViewTargetWithBlend(InCameraActor, ResolvedBlendTime, InBlendFunction, InBlendExp, bInLockOutgoing);
+	const TWeakObjectPtr<ACameraActor> CameraActorWeak(InCameraActor);
+	const TWeakObjectPtr<APlayerController> PlayerControllerWeak(PlayerController);
+	DelegateHandle_BlendComplete = PlayerController->PlayerCameraManager->OnBlendComplete().AddWeakLambda(this, [this, CameraActorWeak, PlayerControllerWeak, FocusRequestId]()
+	{
+		ACameraActor* CameraActor = CameraActorWeak.Get();
+		APlayerController* PlayerController = PlayerControllerWeak.Get();
+		if(!CameraActor || !PlayerController)
 		{
-			SetActorLocation(OutHit.Location);
-			SpringArmComponent->TargetArmLength = OutHit.Distance;
-			JCDigitalTwinPawnInputComponent->SpringArmLengthTemp = SpringArmComponent->TargetArmLength;
-		}
-		else
-		{
-			SetActorLocation(InCameraActor->GetActorLocation());
-			SpringArmComponent->TargetArmLength = 0.0;
-			JCDigitalTwinPawnInputComponent->SpringArmLengthTemp = SpringArmComponent->TargetArmLength;
+			if(FocusRequestId == FocusViewportAsCameraRequestId)
+			{
+				bIsBlending = false;
+				if(PlayerController)
+				{
+					ClearBlendCompleteDelegate(PlayerController);
+					ActivateInput();
+				}
+			}
+			return;
 		}
 		
-		PlayerController->Possess(this);
-		PlayerController->SetControlRotation(
-			FRotator(FMath::Clamp(InCameraActor->GetActorRotation().Pitch, -JCDigitalTwinPawnInputComponent->LookClamp.Y, -JCDigitalTwinPawnInputComponent->LookClamp.X),
-				InCameraActor->GetActorRotation().Yaw,
-				0.0));
-		ActivateInput();
-		PlayerController->PlayerCameraManager->OnBlendComplete().Remove(DelegateHandle_BlendComplete);
-		bIsBlending = false;
+		CompleteFocusViewportAsCamera(CameraActor, PlayerController, FocusRequestId);
 	});
+}
+
+void AJCDigitalTwinPawn::StopFocusLocationLerp()
+{
+	FocusCurrentLocation = GetActorLocation();
+	FocusStartLocation = FocusCurrentLocation;
+	FocusTargetLocation = FocusCurrentLocation;
+}
+
+void AJCDigitalTwinPawn::ClearBlendCompleteDelegate(APlayerController* InPlayerController)
+{
+	if(InPlayerController && InPlayerController->PlayerCameraManager && DelegateHandle_BlendComplete.IsValid())
+	{
+		InPlayerController->PlayerCameraManager->OnBlendComplete().Remove(DelegateHandle_BlendComplete);
+		DelegateHandle_BlendComplete.Reset();
+	}
+}
+
+ACameraActor* AJCDigitalTwinPawn::GetOrCreateBlendSnapshotCamera()
+{
+	if(IsValid(BlendSnapshotCamera))
+	{
+		return BlendSnapshotCamera;
+	}
+
+	UWorld* World = GetWorld();
+	if(!World)
+	{
+		return nullptr;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.ObjectFlags |= RF_Transient;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	BlendSnapshotCamera = World->SpawnActor<ACameraActor>(ACameraActor::StaticClass(), FTransform::Identity, SpawnParameters);
+	if(BlendSnapshotCamera)
+	{
+		BlendSnapshotCamera->SetActorHiddenInGame(true);
+		BlendSnapshotCamera->SetActorEnableCollision(false);
+		BlendSnapshotCamera->SetActorTickEnabled(false);
+	}
+
+	return BlendSnapshotCamera;
+}
+
+bool AJCDigitalTwinPawn::CaptureCurrentCameraPOV(APlayerController* InPlayerController)
+{
+	if(!InPlayerController || !InPlayerController->PlayerCameraManager)
+	{
+		return false;
+	}
+
+	ACameraActor* SnapshotCamera = GetOrCreateBlendSnapshotCamera();
+	if(!SnapshotCamera)
+	{
+		return false;
+	}
+
+	UCameraComponent* SnapshotCameraComponent = SnapshotCamera->GetCameraComponent();
+	if(!SnapshotCameraComponent)
+	{
+		return false;
+	}
+
+	const FMinimalViewInfo& CurrentPOV = InPlayerController->PlayerCameraManager->GetCameraCacheView();
+	SnapshotCamera->SetActorLocationAndRotation(CurrentPOV.Location, CurrentPOV.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+	SnapshotCameraComponent->SetFieldOfView(CurrentPOV.FOV);
+	SnapshotCameraComponent->SetFirstPersonFieldOfView(CurrentPOV.FirstPersonFOV);
+	SnapshotCameraComponent->SetFirstPersonScale(CurrentPOV.FirstPersonScale);
+	SnapshotCameraComponent->SetEnableFirstPersonFieldOfView(CurrentPOV.bUseFirstPersonParameters);
+	SnapshotCameraComponent->SetEnableFirstPersonScale(CurrentPOV.bUseFirstPersonParameters);
+	SnapshotCameraComponent->SetOrthoWidth(CurrentPOV.OrthoWidth);
+	SnapshotCameraComponent->SetAutoCalculateOrthoPlanes(CurrentPOV.bAutoCalculateOrthoPlanes);
+	SnapshotCameraComponent->SetAutoPlaneShift(CurrentPOV.AutoPlaneShift);
+	SnapshotCameraComponent->SetOrthoNearClipPlane(CurrentPOV.OrthoNearClipPlane);
+	SnapshotCameraComponent->SetOrthoFarClipPlane(CurrentPOV.OrthoFarClipPlane);
+	SnapshotCameraComponent->SetUpdateOrthoPlanes(CurrentPOV.bUpdateOrthoPlanes);
+	SnapshotCameraComponent->SetUseCameraHeightAsViewTarget(CurrentPOV.bUseCameraHeightAsViewTarget);
+	SnapshotCameraComponent->SetAspectRatio(CurrentPOV.AspectRatio);
+	SnapshotCameraComponent->SetConstraintAspectRatio(CurrentPOV.bConstrainAspectRatio);
+	SnapshotCameraComponent->bOverrideAspectRatioAxisConstraint = CurrentPOV.AspectRatioAxisConstraint.IsSet();
+	if(CurrentPOV.AspectRatioAxisConstraint.IsSet())
+	{
+		SnapshotCameraComponent->SetAspectRatioAxisConstraint(CurrentPOV.AspectRatioAxisConstraint.GetValue());
+	}
+	SnapshotCameraComponent->SetUseFieldOfViewForLOD(CurrentPOV.bUseFieldOfViewForLOD);
+	SnapshotCameraComponent->SetProjectionMode(CurrentPOV.ProjectionMode);
+	SnapshotCameraComponent->SetOverscan(CurrentPOV.GetOverscan());
+	SnapshotCameraComponent->SetPostProcessBlendWeight(CurrentPOV.PostProcessBlendWeight);
+	SnapshotCameraComponent->PostProcessSettings = CurrentPOV.PostProcessSettings;
+
+	return true;
+}
+
+void AJCDigitalTwinPawn::CompleteFocusViewportAsCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController, int32 InFocusRequestId)
+{
+	if(InFocusRequestId != FocusViewportAsCameraRequestId || !InCameraActor || !InPlayerController)
+	{
+		return;
+	}
+
+	FVector StartPos = InCameraActor->GetActorLocation();
+	FVector EndPos = InCameraActor->GetActorLocation() + InCameraActor->GetActorForwardVector() * LineTraceDistance;
+
+	ECollisionChannel CollisionChannel = ECollisionChannel::ECC_Visibility;
+	UWorld* World = GetWorld();
+	FHitResult OutHit;
+	bool const bHit = World ? World->LineTraceSingleByChannel(OutHit, StartPos, EndPos, CollisionChannel) : false;
+	if(bHit)
+	{
+		SetActorLocation(OutHit.Location);
+		SpringArmComponent->TargetArmLength = OutHit.Distance;
+		JCDigitalTwinPawnInputComponent->SpringArmLengthTemp = SpringArmComponent->TargetArmLength;
+	}
+	else
+	{
+		SetActorLocation(InCameraActor->GetActorLocation());
+		SpringArmComponent->TargetArmLength = 0.0;
+		JCDigitalTwinPawnInputComponent->SpringArmLengthTemp = SpringArmComponent->TargetArmLength;
+	}
+
+	StopFocusLocationLerp();
+	InPlayerController->Possess(this);
+	InPlayerController->SetControlRotation(
+		FRotator(FMath::Clamp(InCameraActor->GetActorRotation().Pitch, -JCDigitalTwinPawnInputComponent->LookClamp.Y, -JCDigitalTwinPawnInputComponent->LookClamp.X),
+			InCameraActor->GetActorRotation().Yaw,
+			0.0));
+	ActivateInput();
+	ClearBlendCompleteDelegate(InPlayerController);
+	bIsBlending = false;
 }
 
 bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation)

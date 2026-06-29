@@ -9,6 +9,8 @@ class USpringArmComponent;
 class USphereComponent;
 class UFloatingPawnMovement;
 class UJCDigitalTwinPawnInputComponent;
+class ACameraActor;
+class APlayerController;
 
 
 UCLASS(BlueprintType)
@@ -68,9 +70,18 @@ public:
 private:
 	bool CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation);
 	void LerpToTargetLocation(const FVector& InTargetLocation);
+	void StopFocusLocationLerp();
+	void ClearBlendCompleteDelegate(APlayerController* InPlayerController);
+	ACameraActor* GetOrCreateBlendSnapshotCamera();
+	bool CaptureCurrentCameraPOV(APlayerController* InPlayerController);
+	void CompleteFocusViewportAsCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController, int32 InFocusRequestId);
 
 	bool bIsBlending = false;
 	FDelegateHandle DelegateHandle_BlendComplete;
+	int32 FocusViewportAsCameraRequestId = 0;
+
+	UPROPERTY(Transient)
+	ACameraActor* BlendSnapshotCamera = nullptr;
 
 	/** Current viewport Position. */
 	FVector	FocusCurrentLocation;
