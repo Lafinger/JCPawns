@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "JCDigitalTwinPawn.h"
@@ -20,7 +20,7 @@ AJCDigitalTwinPawn::AJCDigitalTwinPawn()
 {
 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
-	
+
 	// scene
 	SphereComponent = CreateDefaultSubobject<USphereComponent>(FName("DigitalTwinPawnSphere"));
 	SphereComponent->InitSphereRadius(35.0f);
@@ -38,7 +38,7 @@ AJCDigitalTwinPawn::AJCDigitalTwinPawn()
 	CameraComponent->SetupAttachment(SpringArmComponent, USpringArmComponent::SocketName);
 	CameraComponent->SetRelativeLocationAndRotation(FVector(0, 0, 0), FRotator(0, 0, 0));
 	CameraComponent->bUsePawnControlRotation = false;
-	
+
 	JCDigitalTwinPawnInputComponent = CreateDefaultSubobject<UJCDigitalTwinPawnInputComponent>(FName("JCDigitalTwinPawnInput"));
 }
 
@@ -61,16 +61,14 @@ void AJCDigitalTwinPawn::Tick(float DeltaTime)
 void AJCDigitalTwinPawn::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
 	// ActivateInput();
 }
 
 void AJCDigitalTwinPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if(APlayerController* PlayerController = Cast<APlayerController>(GetController()))
-	{
-		ClearBlendCompleteDelegate(PlayerController);
-	}
+	ClearFocusCompletionCallbacks(Cast<APlayerController>(GetController()));
+	FocusViewportAsCameraFinishedDelegate.Clear();
 
 	if(IsValid(BlendSnapshotCamera))
 	{
@@ -116,7 +114,7 @@ void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
 			UPrimitiveComponent* PrimitiveComponent = Cast<UPrimitiveComponent>(SceneComponent);
 			if (PrimitiveComponent && PrimitiveComponent->IsRegistered())
 			{
-				// Some components can have huge bounds but are not visible.  Ignore these components unless it is the only component on the actor 
+				// Some components can have huge bounds but are not visible.  Ignore these components unless it is the only component on the actor
 				const bool bIgnore = SceneComponents.Num() > 1 && PrimitiveComponent->GetIgnoreBoundsForEditorFocus();
 				if (!bIgnore)
 				{
@@ -138,35 +136,39 @@ void AJCDigitalTwinPawn::FocusViewportOnActor(const AActor* InTargetActor)
 	{
 		return;
 	}
-	
+
 	LerpToTargetLocation(Location);
 }
 
-void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime, const EViewTargetBlendFunction InBlendFunction, const float InBlendExp, bool bInLockOutgoing)
+void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime, const EViewTargetBlendFunction InBlendFunction, const float InBlendExp, bool bInLockOutgoing, FJCFocusViewportAsCameraFinishedDelegate InOnFinished)
 {
 	if(!InCameraActor)
 	{
 		return;
 	}
-	
+
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 	if(!PlayerController || !PlayerController->PlayerCameraManager)
 	{
 		ensureAlwaysMsgf(false, TEXT("This pawn has not been possessed by PlayerController!"));
 		return;
 	}
-	
-	if(!bIsBlending && CameraComponent->GetComponentLocation().Equals(InCameraActor->GetActorLocation(), 10.0) && PlayerController->GetControlRotation().Equals(InCameraActor->GetActorRotation(), 5.0))
+
+	if(!bIsBlending && IsViewportAlreadyFocusedOnCamera(InCameraActor, PlayerController))
 	{
+		if(InOnFinished.IsBound())
+		{
+			InOnFinished.Execute();
+		}
 		return;
 	}
 
-	const bool bWasBlending = bIsBlending;
 	const int32 FocusRequestId = ++FocusViewportAsCameraRequestId;
 	const float ResolvedBlendTime = InBlendTime == -1 ? BlendTime : InBlendTime;
 
-	ClearBlendCompleteDelegate(PlayerController);
-	if(bWasBlending && CaptureCurrentCameraPOV(PlayerController))
+	ClearFocusCompletionCallbacks(PlayerController);
+	FocusViewportAsCameraFinishedDelegate = InOnFinished;
+	if(ResolvedBlendTime > 0.0f && CaptureCurrentCameraPOV(PlayerController))
 	{
 		PlayerController->SetViewTarget(BlendSnapshotCamera);
 	}
@@ -190,22 +192,31 @@ void AJCDigitalTwinPawn::FocusViewportAsCamera(ACameraActor* InCameraActor, cons
 	{
 		ACameraActor* CameraActor = CameraActorWeak.Get();
 		APlayerController* PlayerController = PlayerControllerWeak.Get();
-		if(!CameraActor || !PlayerController)
+		if(!IsValid(CameraActor) || !IsValid(PlayerController))
 		{
-			if(FocusRequestId == FocusViewportAsCameraRequestId)
-			{
-				bIsBlending = false;
-				if(PlayerController)
-				{
-					ClearBlendCompleteDelegate(PlayerController);
-					ActivateInput();
-				}
-			}
+			AbortFocusViewportAsCamera(PlayerController, FocusRequestId);
 			return;
 		}
-		
+
 		CompleteFocusViewportAsCamera(CameraActor, PlayerController, FocusRequestId);
 	});
+
+	if(UWorld* World = GetWorld())
+	{
+		FTimerDelegate FallbackDelegate = FTimerDelegate::CreateWeakLambda(this, [this, CameraActorWeak, PlayerControllerWeak, FocusRequestId]()
+		{
+			ACameraActor* CameraActor = CameraActorWeak.Get();
+			APlayerController* PlayerController = PlayerControllerWeak.Get();
+			if(!IsValid(CameraActor) || !IsValid(PlayerController))
+			{
+				AbortFocusViewportAsCamera(PlayerController, FocusRequestId);
+				return;
+			}
+
+			CompleteFocusViewportAsCamera(CameraActor, PlayerController, FocusRequestId);
+		});
+		World->GetTimerManager().SetTimer(TimerHandle_FocusCompletionFallback, FallbackDelegate, ResolvedBlendTime + 0.05f, false);
+	}
 }
 
 void AJCDigitalTwinPawn::StopFocusLocationLerp()
@@ -217,11 +228,32 @@ void AJCDigitalTwinPawn::StopFocusLocationLerp()
 
 void AJCDigitalTwinPawn::ClearBlendCompleteDelegate(APlayerController* InPlayerController)
 {
-	if(InPlayerController && InPlayerController->PlayerCameraManager && DelegateHandle_BlendComplete.IsValid())
+	if(DelegateHandle_BlendComplete.IsValid())
 	{
-		InPlayerController->PlayerCameraManager->OnBlendComplete().Remove(DelegateHandle_BlendComplete);
+		if(InPlayerController && InPlayerController->PlayerCameraManager)
+		{
+			InPlayerController->PlayerCameraManager->OnBlendComplete().Remove(DelegateHandle_BlendComplete);
+		}
 		DelegateHandle_BlendComplete.Reset();
 	}
+}
+
+void AJCDigitalTwinPawn::ClearFocusCompletionTimer()
+{
+	if(TimerHandle_FocusCompletionFallback.IsValid())
+	{
+		if(UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(TimerHandle_FocusCompletionFallback);
+		}
+		TimerHandle_FocusCompletionFallback.Invalidate();
+	}
+}
+
+void AJCDigitalTwinPawn::ClearFocusCompletionCallbacks(APlayerController* InPlayerController)
+{
+	ClearBlendCompleteDelegate(InPlayerController);
+	ClearFocusCompletionTimer();
 }
 
 ACameraActor* AJCDigitalTwinPawn::GetOrCreateBlendSnapshotCamera()
@@ -301,12 +333,52 @@ bool AJCDigitalTwinPawn::CaptureCurrentCameraPOV(APlayerController* InPlayerCont
 	return true;
 }
 
-void AJCDigitalTwinPawn::CompleteFocusViewportAsCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController, int32 InFocusRequestId)
+bool AJCDigitalTwinPawn::IsViewportAlreadyFocusedOnCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController) const
 {
-	if(InFocusRequestId != FocusViewportAsCameraRequestId || !InCameraActor || !InPlayerController)
+	if(!IsValid(InCameraActor) || !InPlayerController || !InPlayerController->PlayerCameraManager)
+	{
+		return false;
+	}
+
+	if(InPlayerController->PlayerCameraManager->GetViewTarget() != this)
+	{
+		return false;
+	}
+
+	const FMinimalViewInfo& CurrentPOV = InPlayerController->PlayerCameraManager->GetCameraCacheView();
+	return CurrentPOV.Location.Equals(InCameraActor->GetActorLocation(), 10.0)
+		&& CurrentPOV.Rotation.Equals(InCameraActor->GetActorRotation(), 5.0);
+}
+
+void AJCDigitalTwinPawn::AbortFocusViewportAsCamera(APlayerController* InPlayerController, int32 InFocusRequestId)
+{
+	if(InFocusRequestId != FocusViewportAsCameraRequestId)
 	{
 		return;
 	}
+
+	APlayerController* PlayerController = InPlayerController ? InPlayerController : Cast<APlayerController>(GetController());
+	ClearFocusCompletionCallbacks(PlayerController);
+	StopFocusLocationLerp();
+	bIsBlending = false;
+	FocusViewportAsCameraFinishedDelegate.Clear();
+	ActivateInput();
+}
+
+void AJCDigitalTwinPawn::CompleteFocusViewportAsCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController, int32 InFocusRequestId)
+{
+	if(InFocusRequestId != FocusViewportAsCameraRequestId)
+	{
+		return;
+	}
+
+	if(!IsValid(InCameraActor) || !IsValid(InPlayerController))
+	{
+		AbortFocusViewportAsCamera(InPlayerController, InFocusRequestId);
+		return;
+	}
+
+	ClearFocusCompletionCallbacks(InPlayerController);
 
 	FVector StartPos = InCameraActor->GetActorLocation();
 	FVector EndPos = InCameraActor->GetActorLocation() + InCameraActor->GetActorForwardVector() * LineTraceDistance;
@@ -335,8 +407,14 @@ void AJCDigitalTwinPawn::CompleteFocusViewportAsCamera(ACameraActor* InCameraAct
 			InCameraActor->GetActorRotation().Yaw,
 			0.0));
 	ActivateInput();
-	ClearBlendCompleteDelegate(InPlayerController);
 	bIsBlending = false;
+
+	FJCFocusViewportAsCameraFinishedDelegate FinishedDelegate = FocusViewportAsCameraFinishedDelegate;
+	FocusViewportAsCameraFinishedDelegate.Clear();
+	if(FinishedDelegate.IsBound())
+	{
+		FinishedDelegate.Execute();
+	}
 }
 
 bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundingBox, FVector& OutTargetLocation)
@@ -355,7 +433,7 @@ bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundin
 	{
 		Radius *= AspectRatio;
 	}
-	
+
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
 	if(!PlayerController)
 	{
@@ -367,7 +445,7 @@ bool AJCDigitalTwinPawn::CalcCameraLocationWithBoundingBox(const FBox& InBoundin
 	const float HalfFOVRadians = FMath::DegreesToRadians(ViewFOV / 2.0f);
 	const float DistanceFromSphere = Radius / FMath::Tan(HalfFOVRadians);
 	FVector CameraOffsetVector = PlayerController->GetControlRotation().Vector() * -DistanceFromSphere;
-	
+
 	OutTargetLocation = Position + CameraOffsetVector;
 	return true;
 }

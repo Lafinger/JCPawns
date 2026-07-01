@@ -13,6 +13,8 @@ JCPawns 是一个 Unreal Engine 5 Runtime 插件，提供可复用的 Pawn 与�
 - 通过 Gameplay Tags 和 `UJCInputConfig` 绑定 Enhanced Input。
 - 提供平滑聚焦到 Actor 包围盒的视口辅助方法。
 - 提供与 `CameraActor` 混合切换并回到 Pawn 控制的辅助方法。
+- 支持可中断的相机聚焦 Blend，新的相机聚焦请求会从当前渲染 POV 继续 Blend。
+- 提供 Focus 完成兜底逻辑；如果外部 ViewTarget 切换打断 Blend，会恢复 Pawn 输入，避免视角拖拽卡住。
 - 提供可被蓝图调用的输入激活和聚焦 API。
 - `Content/` 下包含用于快速测试和集成参考的示例内容。
 
@@ -70,6 +72,27 @@ JCPawns 是一个 Unreal Engine 5 Runtime 插件，提供可复用的 Pawn 与�
 5. 当 Pawn 需要开始接收输入映射上下文时，调用 `ActivateInput()`。
 6. 当需要移除输入映射上下文时，调用 `DeactivateInput()`。
 
+### Blend 到相机
+
+当蓝图逻辑需要将视口移动到场景中的 `CameraActor`，并在完成后回到 Pawn 控制时，调用 `FocusViewportAsCamera`：
+
+```cpp
+FocusViewportAsCamera(CameraActor, BlendTime, BlendFunction, BlendExp, bInLockOutgoing);
+```
+
+行为说明：
+
+- 在 Blend 期间再次调用 `FocusViewportAsCamera` 会中断上一次请求。
+- 新 Blend 会从当前正在渲染的相机 POV 开始，而不是从上一次 Blend 的起点开始。
+- 只有最新的 Focus 请求可以同步 Pawn 位置、Spring Arm 长度、控制旋转和输入状态。
+- 如果 Blend 期间被其他系统切换 ViewTarget，Pawn 会通过兜底完成路径恢复输入，避免输入一直处于停用状态。
+
+与 Level Sequence 的 Camera Cut 组合使用时，建议先暂停 Sequence，再启动 Pawn 聚焦；如果后续不再需要该 Sequence，再停止它：
+
+```text
+Pause -> FocusViewportAsCamera -> Stop
+```
+
 ## 输入配置说明
 
 `UJCDigitalTwinPawnInputComponent` 要求玩家输入组件为 `UJCEnhancedInputComponent`。如果项目仍使用默认的 `UEnhancedInputComponent`，插件会输出：
@@ -109,7 +132,17 @@ Content/Input/Curve/
 - `ActivateInput()`
 - `DeactivateInput()`
 - `FocusViewportOnActor(const AActor* InTargetActor)`
-- `FocusViewportAsCamera(ACameraActor* InCameraActor)`
+- `FocusViewportAsCamera(ACameraActor* InCameraActor, float InBlendTime = -1, EViewTargetBlendFunction InBlendFunction = VTBlend_EaseInOut, float InBlendExp = 1.0f, bool bInLockOutgoing = false)`
+
+`FocusViewportAsCamera` 参数：
+
+| 参数 | 用途 |
+| --- | --- |
+| `InCameraActor` | 要 Blend 到的目标相机 Actor。 |
+| `InBlendTime` | Blend 时长。`-1` 使用 Pawn 的 `BlendTime` 属性，`0` 表示立即完成。 |
+| `InBlendFunction` | UE ViewTarget Blend 曲线。 |
+| `InBlendExp` | Ease 类型 Blend 使用的指数。 |
+| `bInLockOutgoing` | 传给 UE ViewTarget Blend，用于在 Blend 期间锁定起始 POV。 |
 
 重要可编辑属性：
 

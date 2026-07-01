@@ -13,6 +13,8 @@ The plugin includes C++ classes, Blueprint-ready APIs, Enhanced Input assets, sa
 - Enhanced Input binding through gameplay tags and `UJCInputConfig`.
 - Smooth focus helpers for moving the viewport to an actor bounding box.
 - Camera handoff helper for blending to a `CameraActor` and returning control to the pawn.
+- Interruptible camera focus blends that continue from the current rendered POV when a new camera focus request starts.
+- Focus completion fallback that restores pawn input if an external view-target change interrupts the blend.
 - Blueprint-callable input activation and focus APIs.
 - Example content under `Content/` for quick testing and integration reference.
 
@@ -70,6 +72,27 @@ The repository does not declare a specific Unreal Engine 5 minor version. Test t
 5. Call `ActivateInput()` when the pawn should start receiving its mapping context.
 6. Call `DeactivateInput()` when the mapping context should be removed.
 
+### Blend to a camera
+
+Use `FocusViewportAsCamera` when Blueprint logic needs to move the viewport to a placed `CameraActor` and then return control to the pawn:
+
+```cpp
+FocusViewportAsCamera(CameraActor, BlendTime, BlendFunction, BlendExp, bInLockOutgoing);
+```
+
+Behavior notes:
+
+- A second `FocusViewportAsCamera` call during an active blend interrupts the previous request.
+- The new blend starts from the current rendered camera POV, not from the original blend start.
+- Only the latest focus request is allowed to sync pawn location, spring-arm length, control rotation, and input state.
+- If another system changes the view target during the blend, the pawn uses a fallback completion path so input is restored instead of staying deactivated.
+
+When combining with a Level Sequence camera cut, pause the sequence before starting pawn focus, then stop it only if you no longer need it:
+
+```text
+Pause -> FocusViewportAsCamera -> Stop
+```
+
 ## Input Setup Notes
 
 `UJCDigitalTwinPawnInputComponent` expects the player input component to be `UJCEnhancedInputComponent`. If the project still uses the default `UEnhancedInputComponent`, the plugin will report:
@@ -109,7 +132,17 @@ Key Blueprint-callable methods:
 - `ActivateInput()`
 - `DeactivateInput()`
 - `FocusViewportOnActor(const AActor* InTargetActor)`
-- `FocusViewportAsCamera(ACameraActor* InCameraActor)`
+- `FocusViewportAsCamera(ACameraActor* InCameraActor, float InBlendTime = -1, EViewTargetBlendFunction InBlendFunction = VTBlend_EaseInOut, float InBlendExp = 1.0f, bool bInLockOutgoing = false)`
+
+`FocusViewportAsCamera` parameters:
+
+| Parameter | Purpose |
+| --- | --- |
+| `InCameraActor` | Target camera actor to blend to. |
+| `InBlendTime` | Blend duration. `-1` uses the pawn `BlendTime` property. `0` completes immediately. |
+| `InBlendFunction` | View-target blend curve. |
+| `InBlendExp` | Exponent used by ease blend functions. |
+| `bInLockOutgoing` | Passed to UE view-target blending to lock the outgoing POV while blending. |
 
 Important editable properties:
 

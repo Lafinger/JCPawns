@@ -1,7 +1,8 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "TimerManager.h"
 #include "JCDigitalTwinPawn.generated.h"
 
 class UCameraComponent;
@@ -12,6 +13,7 @@ class UJCDigitalTwinPawnInputComponent;
 class ACameraActor;
 class APlayerController;
 
+DECLARE_DYNAMIC_DELEGATE(FJCFocusViewportAsCameraFinishedDelegate);
 
 UCLASS(BlueprintType)
 class JCPAWNS_API AJCDigitalTwinPawn : public APawn
@@ -31,7 +33,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
-	
+
 public:
 	// Camera
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "JC")
@@ -39,10 +41,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "JC")
 	USpringArmComponent* SpringArmComponent;
-	
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "JC")
 	UCameraComponent* CameraComponent;
-	
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "JC")
 	UJCDigitalTwinPawnInputComponent* JCDigitalTwinPawnInputComponent;
 
@@ -55,8 +57,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "JC")
 	void FocusViewportOnActor(const AActor* InTargetActor);
 
-	UFUNCTION(BlueprintCallable, Category = "JC")
-	void FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime = -1, const EViewTargetBlendFunction InBlendFunction = EViewTargetBlendFunction::VTBlend_EaseInOut, const float InBlendExp = 1.0f, bool bInLockOutgoing = false);
+	UFUNCTION(BlueprintCallable, Category = "JC", meta = (CPP_Default_InBlendTime = "-1.0", CPP_Default_InBlendFunction = "VTBlend_EaseInOut", CPP_Default_InBlendExp = "1.0", CPP_Default_bInLockOutgoing = "false"))
+	void FocusViewportAsCamera(ACameraActor* InCameraActor, const float InBlendTime, const EViewTargetBlendFunction InBlendFunction, const float InBlendExp, bool bInLockOutgoing, FJCFocusViewportAsCameraFinishedDelegate InOnFinished);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "JC")
 	float FocusSpeed = 10.0;
@@ -72,13 +74,21 @@ private:
 	void LerpToTargetLocation(const FVector& InTargetLocation);
 	void StopFocusLocationLerp();
 	void ClearBlendCompleteDelegate(APlayerController* InPlayerController);
+	void ClearFocusCompletionTimer();
+	void ClearFocusCompletionCallbacks(APlayerController* InPlayerController);
 	ACameraActor* GetOrCreateBlendSnapshotCamera();
 	bool CaptureCurrentCameraPOV(APlayerController* InPlayerController);
+	bool IsViewportAlreadyFocusedOnCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController) const;
+	void AbortFocusViewportAsCamera(APlayerController* InPlayerController, int32 InFocusRequestId);
 	void CompleteFocusViewportAsCamera(ACameraActor* InCameraActor, APlayerController* InPlayerController, int32 InFocusRequestId);
 
 	bool bIsBlending = false;
 	FDelegateHandle DelegateHandle_BlendComplete;
+	FTimerHandle TimerHandle_FocusCompletionFallback;
 	int32 FocusViewportAsCameraRequestId = 0;
+
+	UPROPERTY(Transient)
+	FJCFocusViewportAsCameraFinishedDelegate FocusViewportAsCameraFinishedDelegate;
 
 	UPROPERTY(Transient)
 	ACameraActor* BlendSnapshotCamera = nullptr;
@@ -88,7 +98,7 @@ private:
 
 	/** Viewport start location when animating to another location */
 	FVector FocusStartLocation;
-	
+
 	/** Desired viewport location when animating between two locations */
 	FVector	FocusTargetLocation;
 };
